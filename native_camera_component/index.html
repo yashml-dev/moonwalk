@@ -1,84 +1,452 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  :root { color-scheme: light; }
-  body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  .wrap { display: flex; flex-direction: column; gap: 8px; }
-  button {
-    appearance: none; border: 1px solid #171717; border-radius: 4px;
-    background: #171717; color: #fff; padding: 12px 16px;
-    font-size: 15px; font-weight: 600; cursor: pointer; text-align: center;
-  }
-  button:focus-visible { outline: 3px solid #ff4d32; outline-offset: 2px; }
-  .hint { color: #777; font-size: 12px; line-height: 1.4; }
-  .status { color: #171717; font-size: 13px; }
-  input { display: none; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <button id="openCamera" type="button">📷 Open phone camera</button>
-  <input id="cameraFile" type="file" accept="image/*" capture="environment">
-  <div id="status" class="status" aria-live="polite"></div>
-  <div class="hint">Your device may show a camera or a photo confirmation screen. The camera opens only when you tap the button.</div>
-</div>
-<script>
-(function () {
-  const input = document.getElementById("cameraFile");
-  const button = document.getElementById("openCamera");
-  const status = document.getElementById("status");
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MOONWALK Live Camera</title>
 
-  function send(type, value) {
-    window.parent.postMessage({isStreamlitMessage: true, type: type, value: value}, "*");
-  }
-
-  window.parent.postMessage(
-    {
-        isStreamlitMessage: true,
-        type: "streamlit:componentReady",
-        apiVersion: 1
-    },
-    "*"
-  );
-  send("streamlit:setFrameHeight", {height: 110});
-
-  button.addEventListener("click", function () {
-    status.textContent = "";
-    input.click();
-  });
-
-  input.addEventListener("change", function () {
-    const file = input.files && input.files[0];
-    if (!file) return;
-    if (!file.type || !file.type.startsWith("image/")) {
-      status.textContent = "Please capture or choose an image.";
-      return;
+  <style>
+    :root {
+      color-scheme: light;
     }
-    status.textContent = "Preparing photo…";
-    const reader = new FileReader();
-    reader.onload = function () {
-      const dataUrl = String(reader.result || "");
-      const comma = dataUrl.indexOf(",");
-      if (comma < 0) {
-        status.textContent = "Could not read the photo. Please try again.";
-        return;
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      background: transparent;
+      color: #202124;
+    }
+
+    .camera-shell {
+      width: 100%;
+    }
+
+    .preview-wrap {
+      position: relative;
+      width: 100%;
+      height: min(65vw, 420px);
+      min-height: 240px;
+      overflow: hidden;
+      border-radius: 12px;
+      background: #111;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    video,
+    #still {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    video {
+      transform: none;
+    }
+
+    #still {
+      display: none;
+      object-fit: contain;
+      background: #111;
+    }
+
+    .placeholder {
+      padding: 24px;
+      color: #ddd;
+      text-align: center;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 15px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      min-height: 42px;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .primary {
+      background: #ff4b4b;
+      color: white;
+    }
+
+    .secondary {
+      background: #ececec;
+      color: #202124;
+    }
+
+    #status {
+      margin-top: 9px;
+      min-height: 20px;
+      font-size: 13px;
+      line-height: 1.45;
+      color: #555;
+      overflow-wrap: anywhere;
+    }
+
+    .hint {
+      margin-top: 4px;
+      color: #777;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="camera-shell">
+
+    <div class="preview-wrap">
+      <video id="preview" autoplay playsinline muted></video>
+
+      <img
+        id="still"
+        alt="Captured pothole photo preview"
+      >
+
+      <div class="placeholder" id="placeholder">
+        Camera preview will appear here.<br>
+        Tap <b>OPEN CAMERA</b> to begin.
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="primary" id="openCamera" type="button">
+        OPEN CAMERA
+      </button>
+
+      <button
+        class="primary"
+        id="capturePhoto"
+        type="button"
+        disabled
+      >
+        CAPTURE PHOTO
+      </button>
+
+      <button
+        class="secondary"
+        id="retakePhoto"
+        type="button"
+        disabled
+      >
+        RETAKE
+      </button>
+
+      <button
+        class="secondary"
+        id="flipCamera"
+        type="button"
+        disabled
+      >
+        FLIP CAMERA
+      </button>
+    </div>
+
+    <div id="status" role="status" aria-live="polite">
+      Camera is off. Tap OPEN CAMERA and allow permission.
+    </div>
+
+    <div class="hint">
+      Camera access requires HTTPS on a deployed website.
+      If access is blocked, use Browse files as a fallback.
+    </div>
+
+  </div>
+
+  <script>
+    (() => {
+      const video = document.getElementById("preview");
+      const still = document.getElementById("still");
+      const placeholder = document.getElementById("placeholder");
+      const openBtn = document.getElementById("openCamera");
+      const captureBtn = document.getElementById("capturePhoto");
+      const retakeBtn = document.getElementById("retakePhoto");
+      const flipBtn = document.getElementById("flipCamera");
+      const status = document.getElementById("status");
+
+      let stream = null;
+      let facingMode = "environment";
+
+      function send(type, value) {
+        const message = {
+          isStreamlitMessage: true,
+          type: type
+        };
+
+        if (value !== undefined) {
+          message.value = value;
+        }
+
+        window.parent.postMessage(message, "*");
       }
-      send("streamlit:setComponentValue", {
-        name: file.name || "camera_capture.jpg",
-        type: file.type || "image/jpeg",
-        data: dataUrl.slice(comma + 1)
+
+      // Notify Streamlit that the component is ready.
+      window.parent.postMessage(
+        {
+          isStreamlitMessage: true,
+          type: "streamlit:componentReady",
+          apiVersion: 1
+        },
+        "*"
+      );
+
+      // Reserve enough space for the preview and controls.
+      function updateFrameHeight() {
+        const shell = document.querySelector(".camera-shell");
+        const height = Math.ceil(shell.getBoundingClientRect().height) + 12;
+
+        window.parent.postMessage(
+          {
+            isStreamlitMessage: true,
+            type: "streamlit:setFrameHeight",
+            height: Math.max(height, 400)
+          },
+          "*"
+        );
+      }
+
+      window.addEventListener("load", updateFrameHeight);
+      window.addEventListener("resize", updateFrameHeight);
+
+      if ("ResizeObserver" in window) {
+        new ResizeObserver(updateFrameHeight).observe(
+          document.querySelector(".camera-shell")
+        );
+      }
+
+      function stopStream() {
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+          stream = null;
+        }
+
+        video.srcObject = null;
+      }
+
+      function showLivePreview() {
+        video.style.display = "block";
+        still.style.display = "none";
+        placeholder.style.display = "none";
+      }
+
+      function showCapturedPreview(dataUrl) {
+        video.style.display = "none";
+        still.src = dataUrl;
+        still.style.display = "block";
+        placeholder.style.display = "none";
+      }
+
+      async function startCamera() {
+        if (
+          !navigator.mediaDevices ||
+          !navigator.mediaDevices.getUserMedia
+        ) {
+          status.textContent =
+            "Camera access is unavailable. Open the HTTPS website " +
+            "in Chrome or Safari, or use Browse files.";
+          return;
+        }
+
+        status.textContent = "Requesting camera permission...";
+        openBtn.disabled = true;
+
+        try {
+          stopStream();
+
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              facingMode: {
+                ideal: facingMode
+              },
+              width: {
+                ideal: 1280
+              },
+              height: {
+                ideal: 960
+              }
+            }
+          });
+
+          video.srcObject = stream;
+          await video.play();
+
+          showLivePreview();
+
+          captureBtn.disabled = false;
+          flipBtn.disabled = false;
+          retakeBtn.disabled = true;
+
+          openBtn.textContent = "CAMERA ON";
+
+          status.textContent =
+            "Live camera is on. Aim at the pothole and tap CAPTURE PHOTO.";
+
+          updateFrameHeight();
+
+        } catch (err) {
+          console.error("MOONWALK camera error:", err);
+
+          let message = "Could not open the camera.";
+
+          if (
+            err &&
+            (
+              err.name === "NotAllowedError" ||
+              err.name === "PermissionDeniedError"
+            )
+          ) {
+            message =
+              "Camera permission was blocked. Allow camera access " +
+              "for this site in your browser settings, then try again.";
+
+          } else if (
+            err &&
+            (
+              err.name === "NotFoundError" ||
+              err.name === "DevicesNotFoundError"
+            )
+          ) {
+            message =
+              "No camera was found on this device. Use Browse files instead.";
+
+          } else if (err && err.name === "NotReadableError") {
+            message =
+              "The camera may be in use by another app. Close that app and retry.";
+
+          } else if (
+            location.protocol !== "https:" &&
+            location.hostname !== "localhost"
+          ) {
+            message =
+              "Camera access requires HTTPS. Open the website using https://.";
+          } else if (err && err.message) {
+            message += " " + err.message;
+          }
+
+          status.textContent = message;
+          stopStream();
+
+        } finally {
+          openBtn.disabled = false;
+          updateFrameHeight();
+        }
+      }
+
+      function capturePhoto() {
+        if (
+          !stream ||
+          !video.videoWidth ||
+          !video.videoHeight
+        ) {
+          status.textContent =
+            "Wait for the live camera preview before capturing.";
+          return;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(
+          video,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        );
+
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+
+        const payload = {
+          name: "camera_capture.jpg",
+          type: "image/jpeg",
+          data: dataUrl.split(",")[1]
+        };
+
+        showCapturedPreview(dataUrl);
+        stopStream();
+
+        captureBtn.disabled = true;
+        retakeBtn.disabled = false;
+        flipBtn.disabled = true;
+
+        openBtn.textContent = "OPEN CAMERA AGAIN";
+
+        status.textContent =
+          "Photo captured. Use SCAN THE DAMAGE below.";
+
+        send("streamlit:setComponentValue", payload);
+        updateFrameHeight();
+      }
+
+      async function retakePhoto() {
+        send("streamlit:setComponentValue", null);
+
+        still.removeAttribute("src");
+        still.style.display = "none";
+        placeholder.style.display = "block";
+
+        openBtn.textContent = "OPEN CAMERA";
+        retakeBtn.disabled = true;
+
+        await startCamera();
+      }
+
+      openBtn.addEventListener("click", () => {
+        if (stream) {
+          status.textContent =
+            "Camera is already running. Capture the photo when ready.";
+          return;
+        }
+
+        startCamera();
       });
-      status.textContent = "Photo added. You can now scan it.";
-    };
-    reader.onerror = function () {
-      status.textContent = "Could not read the photo. Please try again.";
-    };
-    reader.readAsDataURL(file);
-  });
-})();
-</script>
+
+      captureBtn.addEventListener("click", capturePhoto);
+      retakeBtn.addEventListener("click", retakePhoto);
+
+      flipBtn.addEventListener("click", async () => {
+        facingMode =
+          facingMode === "environment" ? "user" : "environment";
+
+        await startCamera();
+      });
+
+      window.addEventListener("beforeunload", stopStream);
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          stopStream();
+        }
+      });
+
+      updateFrameHeight();
+    })();
+  </script>
 </body>
 </html>
