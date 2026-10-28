@@ -124,80 +124,184 @@ with col_l:
                                 help="Lower values find more candidates but also more false alarms.")
         st.caption("Lower finds more, including false alarms. Higher is stricter.")
 
+
 with col_r:
-    uploaded = st.file_uploader("Road image or video", type=["jpg", "jpeg", "png", "mp4", "mov", "avi"],
-                                key="evidence", label_visibility="collapsed")
+    input_method = st.radio(
+        "Input method",
+        ["📷 Take a photo", "📁 Browse files"],
+        horizontal=True,
+        key="image_input_method",
+        label_visibility="collapsed",
+    )
+
+    if input_method == "📷 Take a photo":
+        uploaded = st.camera_input(
+            "Capture a pothole",
+            key="camera_capture",
+        )
+    else:
+        uploaded = st.file_uploader(
+            "Road image or video",
+            type=["jpg", "jpeg", "png", "mp4", "mov", "avi"],
+            key="evidence",
+            label_visibility="collapsed",
+        )
+
     preview_ph = st.empty()
     progress_ph = st.empty()
+
     file_key = None
     valid_upload = False
     ext = ""
+    raw = b""
+    upload_name = ""
+
     if uploaded is not None:
-        ext = Path(uploaded.name).suffix.lower()
+        # Camera captures may need a fallback filename.
+        upload_name = getattr(uploaded, "name", None) or "camera_capture.jpg"
+        ext = Path(upload_name).suffix.lower()
+
         raw = uploaded.getvalue()
-        file_key = (uploaded.name, len(raw), round(float(conf_thresh), 2))
+        file_key = (
+            upload_name,
+            len(raw),
+            round(float(conf_thresh), 2),
+        )
+
         if not raw:
-            ui.note("err", "Empty file", "This file has no data. Choose another one.", preview_ph)
+            ui.note(
+                "err",
+                "Empty file",
+                "This file has no data. Choose another one.",
+                preview_ph,
+            )
+
         elif ext in IMAGE_EXTS:
-            if cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR) is None:
-                ui.note("err", "Can't read this image", "The file looks damaged or isn't a real image. Try a JPG or PNG.", preview_ph)
+            if cv2.imdecode(
+                np.frombuffer(raw, np.uint8),
+                cv2.IMREAD_COLOR,
+            ) is None:
+                ui.note(
+                    "err",
+                    "Can't read this image",
+                    "The file looks damaged or isn't a real image. Try a JPG or PNG.",
+                    preview_ph,
+                )
             else:
                 valid_upload = True
                 with preview_ph.container():
                     st.image(raw, width="stretch")
+
         elif ext in VIDEO_EXTS:
             valid_upload = True
             with preview_ph.container():
                 st.video(raw)
-                st.caption("Video scans every frame (maximum 120 seconds). CPU-only scans can take a while; a short, clear clip works best.")
-        else:
-            ui.note("err", "Unsupported file", "Use JPG, PNG, MP4, MOV or AVI.", preview_ph)
+                st.caption(
+                    "Video scans every frame (maximum 120 seconds). "
+                    "CPU-only scans can take a while; a short, clear clip works best."
+                )
 
-    go = st.button("Scan the damage", type="primary", disabled=not valid_upload, key="go_scan")
+        else:
+            ui.note(
+                "err",
+                "Unsupported file",
+                "Use JPG, PNG, MP4, MOV or AVI.",
+                preview_ph,
+            )
+
+    go = st.button(
+        "Scan the damage",
+        type="primary",
+        disabled=not valid_upload,
+        key="go_scan",
+    )
 
     if go and valid_upload:
         st.session_state.pop("report", None)
         st.session_state.pop("scan", None)
+
         try:
             with tempfile.TemporaryDirectory(prefix="moonwalk_") as tmp:
-                in_path = os.path.join(tmp, Path(uploaded.name).name)
+                in_path = os.path.join(tmp, Path(upload_name).name)
+
                 with open(in_path, "wb") as fh:
                     fh.write(raw)
+
                 if ext in IMAGE_EXTS:
-                    preview_ph.markdown(ui.scan_overlay(data_uri(raw), "Scanning · model running"), unsafe_allow_html=True)
+                    preview_ph.markdown(
+                        ui.scan_overlay(
+                            data_uri(raw),
+                            "Scanning · model running",
+                        ),
+                        unsafe_allow_html=True,
+                    )
                     res = scan_image(model, in_path, float(conf_thresh))
+
                 else:
                     cap = cv2.VideoCapture(in_path)
                     ok, first = cap.read()
                     cap.release()
+
                     if ok:
                         okj, jb = cv2.imencode(".jpg", first)
-                        preview_ph.markdown(ui.scan_overlay(data_uri(jb.tobytes()), "Scanning · frame by frame"), unsafe_allow_html=True)
+                        if okj:
+                            preview_ph.markdown(
+                                ui.scan_overlay(
+                                    data_uri(jb.tobytes()),
+                                    "Scanning · frame by frame",
+                                ),
+                                unsafe_allow_html=True,
+                            )
+
                     last_pct = {"v": -1}
 
                     def on_progress(done, total):
                         pct = int(100 * done / max(total, 1))
                         if pct != last_pct["v"]:
                             last_pct["v"] = pct
-                            progress_ph.markdown(ui.progress_bar(done, total), unsafe_allow_html=True)
+                            progress_ph.markdown(
+                                ui.progress_bar(done, total),
+                                unsafe_allow_html=True,
+                            )
 
-                    res = scan_video(model, in_path, os.path.join(tmp, "moonwalk_detected.mp4"),
-                                     float(conf_thresh), on_progress)
-            st.session_state["scan"] = {"res": res, "key": file_key, "name": uploaded.name}
+                    res = scan_video(
+                        model,
+                        in_path,
+                        os.path.join(tmp, "moonwalk_detected.mp4"),
+                        float(conf_thresh),
+                        on_progress,
+                    )
+
+            st.session_state["scan"] = {
+                "res": res,
+                "key": file_key,
+                "name": upload_name,
+            }
+
         except Exception as exc:
             preview_ph.empty()
             progress_ph.empty()
-            ui.note("err", "Scan failed", f"MOONWALK couldn't process this file. Try another one. <br><small>{escape(str(exc))}</small>")
+            ui.note(
+                "err",
+                "Scan failed",
+                f"MOONWALK couldn't process this file. Try another one. "
+                f"<br><small>{escape(str(exc))}</small>",
+            )
+
         finally:
             try:
                 import torch
+
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             except Exception:
                 pass
+
             gc.collect()
+
         if "scan" in st.session_state:
             st.rerun()
+
 
 scan = st.session_state.get("scan")
 if scan and scan["key"] != file_key:
