@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .wrap { display: flex; flex-direction: column; gap: 8px; }
+  button {
+    appearance: none; border: 1px solid #171717; border-radius: 4px;
+    background: #171717; color: #fff; padding: 12px 16px;
+    font-size: 15px; font-weight: 600; cursor: pointer; text-align: center;
+  }
+  button:focus-visible { outline: 3px solid #ff4d32; outline-offset: 2px; }
+  .hint { color: #777; font-size: 12px; line-height: 1.4; }
+  .status { color: #171717; font-size: 13px; }
+  input { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button id="openCamera" type="button">📷 Open phone camera</button>
+  <input id="cameraFile" type="file" accept="image/*" capture="environment">
+  <div id="status" class="status" aria-live="polite"></div>
+  <div class="hint">Your device may show a camera or a photo confirmation screen. The camera opens only when you tap the button.</div>
+</div>
+<script>
+(function () {
+  const input = document.getElementById("cameraFile");
+  const button = document.getElementById("openCamera");
+  const status = document.getElementById("status");
+
+  function send(type, value) {
+    window.parent.postMessage({isStreamlitMessage: true, type: type, value: value}, "*");
+  }
+
+  window.parent.postMessage(
+    {
+        isStreamlitMessage: true,
+        type: "streamlit:componentReady",
+        apiVersion: 1
+    },
+    "*"
+  );
+  send("streamlit:setFrameHeight", {height: 110});
+
+  button.addEventListener("click", function () {
+    status.textContent = "";
+    input.click();
+  });
+
+  input.addEventListener("change", function () {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (!file.type || !file.type.startsWith("image/")) {
+      status.textContent = "Please capture or choose an image.";
+      return;
+    }
+    status.textContent = "Preparing photo…";
+    const reader = new FileReader();
+    reader.onload = function () {
+      const dataUrl = String(reader.result || "");
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) {
+        status.textContent = "Could not read the photo. Please try again.";
+        return;
+      }
+      send("streamlit:setComponentValue", {
+        name: file.name || "camera_capture.jpg",
+        type: file.type || "image/jpeg",
+        data: dataUrl.slice(comma + 1)
+      });
+      status.textContent = "Photo added. You can now scan it.";
+    };
+    reader.onerror = function () {
+      status.textContent = "Could not read the photo. Please try again.";
+    };
+    reader.readAsDataURL(file);
+  });
+})();
+</script>
+</body>
+</html>

@@ -26,6 +26,12 @@ from report_generator import generate_report
 st.set_page_config(page_title="MOONWALK — Urban infrastructure / field reporting",  layout="wide")
 ui.inject_theme()
 
+# Native mobile camera picker (opens the device camera only after a user tap).
+native_camera = components.declare_component(
+    "moonwalk_native_camera",
+    path=str(Path(__file__).resolve().parent / "native_camera_component"),
+)
+
 DEFAULT_START = (18.5204, 73.8567)  # Pune centre; only a starting point for manual entry
 
 
@@ -124,21 +130,34 @@ with col_l:
                                 help="Lower values find more candidates but also more false alarms.")
         st.caption("Lower finds more, including false alarms. Higher is stricter.")
 
-
 with col_r:
     input_method = st.radio(
         "Input method",
-        ["📷 Take a photo", "📁 Browse files"],
+        ["📁 Browse files", "📷 Take a photo"],
         horizontal=True,
         key="image_input_method",
         label_visibility="collapsed",
     )
 
+    uploaded = None
+    camera_capture = None
+
     if input_method == "📷 Take a photo":
-        uploaded = st.camera_input(
-            "Capture a pothole",
-            key="camera_capture",
+        camera_capture = native_camera(
+            label="Open phone camera",
+            key="native_camera_capture",
+            default=None,
         )
+        if camera_capture and camera_capture.get("data"):
+            try:
+                raw = base64.b64decode(camera_capture["data"])
+                upload_name = camera_capture.get("name") or "camera_capture.jpg"
+            except Exception:
+                raw = b""
+                upload_name = "camera_capture.jpg"
+        else:
+            raw = b""
+            upload_name = ""
     else:
         uploaded = st.file_uploader(
             "Road image or video",
@@ -146,41 +165,31 @@ with col_r:
             key="evidence",
             label_visibility="collapsed",
         )
+        if uploaded is not None:
+            raw = uploaded.getvalue()
+            upload_name = getattr(uploaded, "name", None) or "uploaded_evidence"
+        else:
+            raw = b""
+            upload_name = ""
 
     preview_ph = st.empty()
     progress_ph = st.empty()
-
     file_key = None
     valid_upload = False
-    ext = ""
-    raw = b""
-    upload_name = ""
+    ext = Path(upload_name).suffix.lower() if upload_name else ""
 
-    if uploaded is not None:
-        # Camera captures may need a fallback filename.
-        upload_name = getattr(uploaded, "name", None) or "camera_capture.jpg"
-        ext = Path(upload_name).suffix.lower()
-
-        raw = uploaded.getvalue()
-        file_key = (
-            upload_name,
-            len(raw),
-            round(float(conf_thresh), 2),
-        )
+    if upload_name:
+        file_key = (upload_name, len(raw), round(float(conf_thresh), 2))
 
         if not raw:
             ui.note(
                 "err",
                 "Empty file",
-                "This file has no data. Choose another one.",
+                "This file has no data. Capture or choose another file.",
                 preview_ph,
             )
-
         elif ext in IMAGE_EXTS:
-            if cv2.imdecode(
-                np.frombuffer(raw, np.uint8),
-                cv2.IMREAD_COLOR,
-            ) is None:
+            if cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR) is None:
                 ui.note(
                     "err",
                     "Can't read this image",
@@ -191,7 +200,6 @@ with col_r:
                 valid_upload = True
                 with preview_ph.container():
                     st.image(raw, width="stretch")
-
         elif ext in VIDEO_EXTS:
             valid_upload = True
             with preview_ph.container():
@@ -200,7 +208,6 @@ with col_r:
                     "Video scans every frame (maximum 120 seconds). "
                     "CPU-only scans can take a while; a short, clear clip works best."
                 )
-
         else:
             ui.note(
                 "err",
@@ -219,40 +226,29 @@ with col_r:
     if go and valid_upload:
         st.session_state.pop("report", None)
         st.session_state.pop("scan", None)
-
         try:
             with tempfile.TemporaryDirectory(prefix="moonwalk_") as tmp:
                 in_path = os.path.join(tmp, Path(upload_name).name)
-
                 with open(in_path, "wb") as fh:
                     fh.write(raw)
 
                 if ext in IMAGE_EXTS:
                     preview_ph.markdown(
-                        ui.scan_overlay(
-                            data_uri(raw),
-                            "Scanning · model running",
-                        ),
+                        ui.scan_overlay(data_uri(raw), "Scanning · model running"),
                         unsafe_allow_html=True,
                     )
                     res = scan_image(model, in_path, float(conf_thresh))
-
                 else:
                     cap = cv2.VideoCapture(in_path)
                     ok, first = cap.read()
                     cap.release()
-
                     if ok:
                         okj, jb = cv2.imencode(".jpg", first)
                         if okj:
                             preview_ph.markdown(
-                                ui.scan_overlay(
-                                    data_uri(jb.tobytes()),
-                                    "Scanning · frame by frame",
-                                ),
+                                ui.scan_overlay(data_uri(jb.tobytes()), "Scanning · frame by frame"),
                                 unsafe_allow_html=True,
                             )
-
                     last_pct = {"v": -1}
 
                     def on_progress(done, total):
@@ -277,7 +273,6 @@ with col_r:
                 "key": file_key,
                 "name": upload_name,
             }
-
         except Exception as exc:
             preview_ph.empty()
             progress_ph.empty()
@@ -287,21 +282,17 @@ with col_r:
                 f"MOONWALK couldn't process this file. Try another one. "
                 f"<br><small>{escape(str(exc))}</small>",
             )
-
         finally:
             try:
                 import torch
-
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-
             gc.collect()
 
         if "scan" in st.session_state:
             st.rerun()
-
 
 scan = st.session_state.get("scan")
 if scan and scan["key"] != file_key:
